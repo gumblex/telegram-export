@@ -9,6 +9,9 @@ here = path.abspath(path.dirname(__file__))
 with open("README.rst", "r") as readme:
     desc=readme.read()
 
+with open("requirements.txt", "r") as req:
+    requires=req.read()
+
 setup(
     name='telegram-export',
     license="MPL 2.0",
@@ -27,10 +30,7 @@ setup(
     ],
     keywords='Telegram messaging database',
     packages=find_packages(),
-    install_requires=[
-        'tqdm', 'telethon~=1.4.3', 'appdirs',
-        'async_generator'  # Python 3.5 async gen support
-    ],
+    install_requires=requires,
     scripts=['bin/telegram-export'],
     test_suite='telegram_export.tests',
     project_urls={

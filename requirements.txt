@@ -1,4 +1,4 @@
 appdirs
-telethon~=1.4.3
+telethon~=1.18.2
 tqdm
 PySocks
