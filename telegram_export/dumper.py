@@ -527,7 +527,7 @@ class Dumper:
         if not media:
             return
 
-        #print(f"dump_media: {media}")
+        print(f"dump_media: {media}")
 
         row = {x: None for x in (
             'name', 'mime_type', 'size', 'thumbnail_id',
@@ -627,6 +627,7 @@ class Dumper:
             row['type'] = 'photo'
             row['mime_type'] = 'image/jpeg'
             row['name'] = str(media.date)
+            row['file_reference'] = media.file_reference
             sizes = [x for x in media.sizes
                      if isinstance(x, (types.PhotoSize, types.PhotoCachedSize))]
             if sizes:
@@ -813,7 +814,7 @@ class Dumper:
         The tuples should consist of four elements, these being
         ``(media_id, context_id, sender_id, date)``.
         """
-        resume_media = [(mt[0], mt[1],mt[2].user_id, mt[3]) for mt in media_tuples]
+        resume_media = [(mt[0], mt[1],get_peer_id(mt[2]), mt[3]) for mt in media_tuples]
         self.conn.executemany("INSERT OR REPLACE INTO ResumeMedia "
                               "VALUES (?,?,?,?)", resume_media)
 

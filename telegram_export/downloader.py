@@ -268,8 +268,11 @@ class Downloader:
         if media_type == 'document':
             location = types.InputDocumentFileLocation(
                 id=media_row[0],
-                version=media_row[1],
-                access_hash=media_row[2]
+                #version=media_row[1],
+                access_hash=media_row[2],
+                thumb_size=str(media_row[6]),
+                #thumb_size=None,
+                file_reference=media_row[7] or ''
             )
         else:
             location = types.InputFileLocation(
@@ -299,14 +302,19 @@ class Downloader:
         self._incomplete_download = filename
         if location.file_reference:
             #print(f"!!! downloading {filename} {location} for {media_row}")
-            await self.client.download_file(
-                location, file=filename, file_size=media_row[6],
-                part_size_kb=DOWNLOAD_PART_SIZE // 1024,
-                progress_callback=progress,
-            )
+            try:
+                await self.client.download_file(
+                    location,
+                    file=filename,
+                    file_size=media_row[6],
+                    part_size_kb=DOWNLOAD_PART_SIZE // 1024,
+                    progress_callback=progress,
+                )
+            except:
+                __log__.exception(f"Error downloading {filename} {location} for {media_row}")
+
         else:
-            pass
-            #print(f"!!! missing file_reference in {location} for {media_row}")
+            __log__.warn(f"!!! missing file_reference in {location} for {media_row}")
         self._incomplete_download = None
 
     async def _media_consumer(self, queue, bar):
