@@ -127,6 +127,7 @@ class Dumper:
                       "LocalID INT,"
                       "VolumeID INT,"
                       "Secret INT,"
+                      "FileReference TEXT,"
                       # Whatever else as JSON here
                       "Extra TEXT,"
                       "FOREIGN KEY (ThumbnailID) REFERENCES Media(ID))")
@@ -309,10 +310,19 @@ class Dumper:
         if not message.message and message.media:
             message.message = getattr(message.media, 'caption', '')
 
+        from_id = None
+        if message.from_id:
+            from_id = get_peer_id(message.from_id)
+
+        if forward_id:
+            forward_id = get_peer_id(forward_id)
+
+        #print(f"dump_message: {message}")
+
         row = (message.id,
                context_id,
                message.date.timestamp(),
-               message.from_id,
+               from_id,
                message.message,
                message.reply_to_msg_id,
                forward_id,
@@ -338,10 +348,14 @@ class Dumper:
         sanitize_dict(extra)
         extra = json.dumps(extra)
 
+        from_id = None
+        if message.from_id:
+            from_id = get_peer_id(message.from_id)
+
         row = (message.id,
                context_id,
                message.date.timestamp(),
-               message.from_id,
+               from_id,
                extra,  # Message field contains the information
                message.reply_to_msg_id,
                None,  # No forward
@@ -367,10 +381,13 @@ class Dumper:
         sanitize_dict(extra)
         extra = json.dumps(extra)
 
+        user_id = None
+        if event.user_id:
+            user_id = get_peer_id(event.user_id)
         row = (event.id,
                context_id,
                event.date.timestamp(),
-               event.user_id,
+               user_id,
                media_id1,
                media_id2,
                name,
@@ -510,9 +527,11 @@ class Dumper:
         if not media:
             return
 
+        #print(f"dump_media: {media}")
+
         row = {x: None for x in (
             'name', 'mime_type', 'size', 'thumbnail_id',
-            'local_id', 'volume_id', 'secret'
+            'local_id', 'volume_id', 'secret', 'file_reference'
         )}
         row['type'] = media_type
         row['extra'] = media.to_dict()
@@ -534,9 +553,10 @@ class Dumper:
             if isinstance(doc, types.Document):
                 row['mime_type'] = doc.mime_type
                 row['size'] = doc.size
-                row['thumbnail_id'] = self.dump_media(doc.thumb)
+                if doc.thumbs:
+                    row['thumbnail_id'] = self.dump_media(doc.thumbs[0])
                 row['local_id'] = doc.id
-                row['volume_id'] = doc.version
+                row['file_reference'] = doc.file_reference
                 row['secret'] = doc.access_hash
                 for attr in doc.attributes:
                     if isinstance(attr, types.DocumentAttributeFilename):
@@ -628,7 +648,7 @@ class Dumper:
                     row['size'] = media.size
                 elif isinstance(media, types.PhotoCachedSize):
                     row['size'] = len(media.bytes)
-                if isinstance(media.location, types.FileLocation):
+                if isinstance(media.location, types.FileLocationToBeDeprecated):
                     media = media.location
 
         if isinstance(media, (types.UserProfilePhoto, types.ChatPhoto)):
@@ -639,10 +659,13 @@ class Dumper:
             )
             media = media.photo_big
 
-        if isinstance(media, types.FileLocation):
+        if isinstance(media, types.FileLocationToBeDeprecated):
             row['local_id'] = media.local_id
             row['volume_id'] = media.volume_id
-            row['secret'] = media.secret
+            row['secret'] = None #  Field is not available anymore media.secret
+
+        if media.to_dict().get("file_reference"):
+            row["file_reference"] = media.file_reference
 
         if row['type']:
             # We'll say two files are the same if they point to the same
@@ -664,7 +687,7 @@ class Dumper:
                 row['name'], row['mime_type'], row['size'],
                 row['thumbnail_id'], row['type'],
                 row['local_id'], row['volume_id'], row['secret'],
-                row['extra']
+                row['file_reference'], row['extra']
             ))
 
     def dump_forward(self, forward):
@@ -676,9 +699,12 @@ class Dumper:
         if not forward:
             return None
 
+        from_id = None
+        if forward.from_id:
+            from_id = get_peer_id(forward.from_id)
         row = (None,  # Database will handle this
                forward.date.timestamp(),
-               forward.from_id,
+               from_id,
                forward.channel_post,
                forward.post_author)
 
@@ -787,8 +813,9 @@ class Dumper:
         The tuples should consist of four elements, these being
         ``(media_id, context_id, sender_id, date)``.
         """
+        resume_media = [(mt[0], mt[1],mt[2].user_id, mt[3]) for mt in media_tuples]
         self.conn.executemany("INSERT OR REPLACE INTO ResumeMedia "
-                              "VALUES (?,?,?,?)", media_tuples)
+                              "VALUES (?,?,?,?)", resume_media)
 
     def _insert_if_valid_date(self, into, values, date_column, where):
         """
@@ -828,6 +855,7 @@ class Dumper:
         Helper method to insert or replace the
         given tuple of values into the given table.
         """
+        #print(f"_insert: {into} <- {values}")
         try:
             fmt = ','.join('?' * len(values))
             c = self.conn.execute("INSERT OR REPLACE INTO {} VALUES ({})"

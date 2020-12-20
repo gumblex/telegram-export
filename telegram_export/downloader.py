@@ -40,9 +40,8 @@ class Downloader:
     Download dialogs and their associated data, and dump them.
     Make Telegram API requests and sleep for the appropriate time.
     """
-    def __init__(self, client, config, dumper, loop):
+    def __init__(self, client, config, dumper):
         self.client = client
-        self.loop = loop or asyncio.get_event_loop()
         self.max_size = config.getint('MaxSize')
         self.types = {x.strip().lower()
                       for x in (config.get('MediaWhitelist') or '').split(',')
@@ -93,6 +92,7 @@ class Downloader:
         Supply None as the photo_id if self.types is empty or 'chatphoto' is
         not in self.types
         """
+        #print(f"_dump_full_entity: {entity}")
         if isinstance(entity, types.UserFull):
             if not self.types or 'chatphoto' in self.types:
                 photo_id = self.dumper.dump_media(entity.profile_photo)
@@ -187,7 +187,7 @@ class Downloader:
         if peer_id is None:
             return ''
 
-        name = self._displays.get(peer_id)
+        name = self._displays.get(utils.get_peer_id(peer_id))
         if name:
             return name
 
@@ -218,7 +218,7 @@ class Downloader:
     async def _download_media(self, media_id, context_id, sender_id, date,
                               bar):
         media_row = self.dumper.conn.execute(
-            'SELECT LocalID, VolumeID, Secret, Type, MimeType, Name, Size '
+            'SELECT LocalID, VolumeID, Secret, Type, MimeType, Name, Size, FileReference '
             'FROM Media WHERE ID = ?', (media_id,)
         ).fetchone()
         # Documents have attributes and they're saved under the "document"
@@ -264,6 +264,7 @@ class Downloader:
 
         __log__.debug('Downloading to %s', filename)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
+        #print(f"_download_media: {media_row}")
         if media_type == 'document':
             location = types.InputDocumentFileLocation(
                 id=media_row[0],
@@ -274,7 +275,8 @@ class Downloader:
             location = types.InputFileLocation(
                 local_id=media_row[0],
                 volume_id=media_row[1],
-                secret=media_row[2]
+                secret=media_row[2] or 0,
+                file_reference=media_row[7] or ''
             )
 
         def progress(saved, total):
@@ -295,11 +297,16 @@ class Downloader:
             bar.total += media_row[6]
 
         self._incomplete_download = filename
-        await self.client.download_file(
-            location, file=filename, file_size=media_row[6],
-            part_size_kb=DOWNLOAD_PART_SIZE // 1024,
-            progress_callback=progress
-        )
+        if location.file_reference:
+            #print(f"!!! downloading {filename} {location} for {media_row}")
+            await self.client.download_file(
+                location, file=filename, file_size=media_row[6],
+                part_size_kb=DOWNLOAD_PART_SIZE // 1024,
+                progress_callback=progress,
+            )
+        else:
+            pass
+            #print(f"!!! missing file_reference in {location} for {media_row}")
         self._incomplete_download = None
 
     async def _media_consumer(self, queue, bar):
@@ -310,8 +317,7 @@ class Downloader:
                                        datetime.datetime.utcfromtimestamp(date),
                                        bar)
             queue.task_done()
-            await asyncio.sleep(max(MEDIA_DELAY - (time.time() - start), 0),
-                                loop=self.loop)
+            await asyncio.sleep(max(MEDIA_DELAY - (time.time() - start), 0))
 
     async def _user_consumer(self, queue, bar):
         while self._running:
@@ -321,8 +327,7 @@ class Downloader:
             ))
             queue.task_done()
             bar.update(1)
-            await asyncio.sleep(max(USER_FULL_DELAY - (time.time() - start), 0),
-                                loop=self.loop)
+            await asyncio.sleep(max(USER_FULL_DELAY - (time.time() - start), 0))
 
     async def _chat_consumer(self, queue, bar):
         while self._running:
@@ -336,8 +341,7 @@ class Downloader:
                 ))
             queue.task_done()
             bar.update(1)
-            await asyncio.sleep(max(CHAT_FULL_DELAY - (time.time() - start), 0),
-                                loop=self.loop)
+            await asyncio.sleep(max(CHAT_FULL_DELAY - (time.time() - start), 0))
 
     def enqueue_entities(self, entities):
         """
@@ -415,12 +419,9 @@ class Downloader:
                             total=0, postfix={'chat': chat_name})
         # Divisor is 1000 not 1024 since tqdm puts a K not a Ki
 
-        asyncio.ensure_future(self._user_consumer(self._user_queue, ent_bar),
-                              loop=self.loop)
-        asyncio.ensure_future(self._chat_consumer(self._chat_queue, ent_bar),
-                              loop=self.loop)
-        asyncio.ensure_future(self._media_consumer(self._media_queue, med_bar),
-                              loop=self.loop)
+        asyncio.ensure_future(self._user_consumer(self._user_queue, ent_bar))
+        asyncio.ensure_future(self._chat_consumer(self._chat_queue, ent_bar))
+        asyncio.ensure_future(self._media_consumer(self._media_queue, med_bar))
 
         self.enqueue_entities(self.dumper.iter_resume_entities(target_id))
         for mid, sender_id, date in self.dumper.iter_resume_media(target_id):
@@ -547,9 +548,7 @@ class Downloader:
                 # We need to sleep for HISTORY_DELAY but we have already spent
                 # some of it invoking (so subtract said delta from the delay).
                 await asyncio.sleep(
-                    max(HISTORY_DELAY - (time.time() - start), 0),
-                    loop=self.loop
-                )
+                    max(HISTORY_DELAY - (time.time() - start), 0))
 
             # Message loop complete, wait for the queues to empty
             msg_bar.n = msg_bar.total
@@ -567,9 +566,7 @@ class Downloader:
                     log_req.max_id = self._dump_admin_log(result.events,
                                                           target)
                     await asyncio.sleep(max(
-                        HISTORY_DELAY - (time.time() - start), 0),
-                        loop=self.loop
-                    )
+                        HISTORY_DELAY - (time.time() - start), 0))
                 else:
                     log_req = None
 

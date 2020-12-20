@@ -130,7 +130,7 @@ def get_extension(mime):
     """
     if not mime:
         mime = ''
-    
+
     return (
         COMMON_MIME_TO_EXTENSION.get(mime)
         or mimetypes.guess_extension(mime)
@@ -231,7 +231,7 @@ def parse_proxy_str(proxy_str):
     url_parser = urlparse(proxy_str)
     proxy_type = None
     proxy_type_str = url_parser.scheme
-    
+
     if proxy_type_str.lower() == "socks5":
         proxy_type = socks.SOCKS5
     elif proxy_type_str.lower() == "socks4":

@@ -48,10 +48,10 @@ async def get_entities_iter(mode, in_list, client):
 
 class Exporter:
     """A class to iterate through dialogs and dump them, or save past media"""
-    def __init__(self, client, config, dumper, loop):
+    def __init__(self, client, config, dumper):
         self.client = client
         self.dumper = dumper
-        self.downloader = Downloader(client, config['Dumper'], dumper, loop)
+        self.downloader = Downloader(client, config['Dumper'], dumper)
         self.logger = logging.getLogger("exporter")
 
     async def close(self):

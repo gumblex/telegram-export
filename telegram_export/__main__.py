@@ -244,7 +244,7 @@ async def list_or_search_dialogs(args, client):
     await client.disconnect()
 
 
-async def main(loop):
+async def main():
     """
     The main telegram-export program. Goes through the
     configured dialogs and dumps them into the database.
@@ -276,7 +276,6 @@ async def main(loop):
                 absolute_session_name,
                 config['TelegramAPI']['ApiId'],
                 config['TelegramAPI']['ApiHash'],
-                loop=loop,
                 proxy=proxy
             ).start(config['TelegramAPI']['PhoneNumber'], password=config['TelegramAPI']['SecondFactorPassword']))
     else:
@@ -284,14 +283,13 @@ async def main(loop):
             absolute_session_name,
             config['TelegramAPI']['ApiId'],
             config['TelegramAPI']['ApiHash'],
-            loop=loop,
             proxy=proxy
         ).start(config['TelegramAPI']['PhoneNumber']))
 
     if args.list_dialogs or args.search_string:
         return await list_or_search_dialogs(args, client)
 
-    exporter = Exporter(client, config, dumper, loop)
+    exporter = Exporter(client, config, dumper)
 
     try:
         if args.download_past_media:
@@ -311,19 +309,17 @@ async def main(loop):
 
 
 if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
     try:
-        ret = loop.run_until_complete(main(loop)) or 0
+        ret = asyncio.run(main()) or 0
     except KeyboardInterrupt:
         ret = 1
-    for task in asyncio.Task.all_tasks():
-        task.cancel()
-        # Now we should await task to execute it's cancellation.
-        # Cancelled task raises asyncio.CancelledError that we can suppress:
-        if hasattr(task._coro, '__name__') and task._coro.__name__ == 'main':
-            continue
-        with suppress(asyncio.CancelledError):
-            loop.run_until_complete(task)
-    loop.stop()
-    loop.close()
+    #for task in asyncio.all_tasks():
+    #    task.cancel()
+    #    # Now we should await task to execute it's cancellation.
+    #    # Cancelled task raises asyncio.CancelledError that we can suppress:
+    #    if hasattr(task._coro, '__name__') and task._coro.__name__ == 'main':
+    #        continue
+    #    with suppress(asyncio.CancelledError):
+    #        loop = asyncio.get_event_loop()
+    #        loop.run_until_complete(task)
     exit(ret)

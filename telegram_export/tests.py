@@ -9,8 +9,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import utils
-from downloader import Downloader
-from dumper import Dumper
+from telegram_export.downloader import Downloader
+from telegram_export.dumper import Dumper
 from telethon import TelegramClient, utils as tl_utils
 from telethon.errors import (
     PhoneNumberOccupiedError, SessionPasswordNeededError
@@ -18,7 +18,7 @@ from telethon.errors import (
 from telethon.extensions import markdown
 from telethon.tl import functions, types
 
-from formatters import BaseFormatter
+from telegram_export.formatters import BaseFormatter
 
 # Configuration as to which tests to run
 ALLOW_NETWORK = False
