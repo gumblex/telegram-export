@@ -527,7 +527,7 @@ class Dumper:
         if not media:
             return
 
-        print(f"dump_media: {media}")
+       # print(f"dump_media: {media}")
 
         row = {x: None for x in (
             'name', 'mime_type', 'size', 'thumbnail_id',
@@ -663,7 +663,7 @@ class Dumper:
         if isinstance(media, types.FileLocationToBeDeprecated):
             row['local_id'] = media.local_id
             row['volume_id'] = media.volume_id
-            row['secret'] = None #  Field is not available anymore media.secret
+            #row['secret'] = media.secretField is not available for FileLocationToBeDeprecated media.secret
 
         if media.to_dict().get("file_reference"):
             row["file_reference"] = media.file_reference
