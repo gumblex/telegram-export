@@ -17,7 +17,7 @@ from . import utils
 
 logger = logging.getLogger(__name__)
 
-DB_VERSION = 1  # database version
+DB_VERSION = 2  # database version
 
 
 class InputFileType(Enum):
@@ -95,12 +95,12 @@ class Dumper:
                 self.conn.commit()
         if not exists:
             # Tables don't exist, create new ones
-            c.execute("CREATE TABLE Version (Version INTEGER)")
-            c.execute("CREATE TABLE SelfInformation (UserID INTEGER)")
+            c.execute("CREATE TABLE Version (Version INTEGER PRIMARY KEY)")
+            c.execute("CREATE TABLE SelfInformation (UserID INTEGER PRIMARY KEY)")
             c.execute("INSERT INTO Version VALUES (?)", (DB_VERSION,))
 
             c.execute("CREATE TABLE Forward("
-                      "ID INTEGER PRIMARY KEY AUTOINCREMENT,"
+                      "ID INTEGER PRIMARY KEY,"
                       "OriginalDate INT NOT NULL,"
                       "FromID INT,"  # User or Channel ID
                       "ChannelPost INT,"
@@ -116,21 +116,26 @@ class Dumper:
             #   access_hash -> Secret
             #   version -> VolumeID
             c.execute("CREATE TABLE Media("
-                      "ID INTEGER PRIMARY KEY AUTOINCREMENT,"
+                      "ID INTEGER PRIMARY KEY,"
                       # Basic useful information, if available
                       "Name TEXT,"
                       "MimeType TEXT,"
                       "Size INT,"
                       "ThumbnailID INT,"
                       "Type TEXT,"
+                      # Max photo thumb size
+                      "ThumbSize TEXT,"
                       # Fields required to download the file
                       "LocalID INT,"
                       "VolumeID INT,"
                       "Secret INT,"
-                      "FileReference TEXT,"
+                      "DC INT,"
+                      "FileReference BLOB,"
                       # Whatever else as JSON here
                       "Extra TEXT,"
                       "FOREIGN KEY (ThumbnailID) REFERENCES Media(ID))")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_media_local_id "
+                      "ON Media (LocalID)")
 
             c.execute("CREATE TABLE User("
                       "ID INT NOT NULL,"
@@ -216,11 +221,11 @@ class Dumper:
                       "PRIMARY KEY (ID, ContextID))")
 
             c.execute("CREATE TABLE Resume("
-                      "ContextID INT NOT NULL,"
+                      "ContextID INTEGER PRIMARY KEY,"
                       "ID INT NOT NULL,"
                       "Date INT NOT NULL,"
-                      "StopAt INT NOT NULL,"
-                      "PRIMARY KEY (ContextID))")
+                      "StopAt INT NOT NULL"
+                      ")")
 
             c.execute("CREATE TABLE ResumeEntity("
                       "ContextID INT NOT NULL,"
@@ -229,11 +234,11 @@ class Dumper:
                       "PRIMARY KEY (ContextID, ID))")
 
             c.execute("CREATE TABLE ResumeMedia("
-                      "MediaID INT NOT NULL,"
+                      "MediaID INTEGER PRIMARY KEY,"
                       "ContextID INT NOT NULL,"
                       "SenderID INT,"
-                      "Date INT,"
-                      "PRIMARY KEY (MediaID))")
+                      "Date INT"
+                      ")")
             self.conn.commit()
 
     def _upgrade_database(self, old):
@@ -346,7 +351,7 @@ class Dumper:
         extra = message.action.to_dict()
         del extra['_']  # We don't need to store the type, already have name
         sanitize_dict(extra)
-        extra = json.dumps(extra)
+        extra = json.dumps(extra, ensure_ascii=False)
 
         from_id = None
         if message.from_id:
@@ -379,7 +384,7 @@ class Dumper:
         extra = event.action.to_dict()
         del extra['_']  # We don't need to store the type, already have name
         sanitize_dict(extra)
-        extra = json.dumps(extra)
+        extra = json.dumps(extra, ensure_ascii=False)
 
         user_id = None
         if event.user_id:
@@ -499,7 +504,7 @@ class Dumper:
             removed = set()
         else:
             # Build the last known list of participants from the saved deltas
-            last_ids = set(int(x) for x in row[0].split(','))
+            last_ids = set(int(x) for x in row[0].split(',') if x != '')
             row = c.fetchone()
             while row:
                 added = set(int(x) for x in row[0].split(',') if x != '')
@@ -530,13 +535,13 @@ class Dumper:
        # print(f"dump_media: {media}")
 
         row = {x: None for x in (
-            'name', 'mime_type', 'size', 'thumbnail_id',
-            'local_id', 'volume_id', 'secret', 'file_reference'
+            'name', 'mime_type', 'size', 'thumb_size', 'thumbnail_id',
+            'local_id', 'volume_id', 'secret', 'file_reference', 'dc_id'
         )}
         row['type'] = media_type
         row['extra'] = media.to_dict()
         sanitize_dict(row['extra'])
-        row['extra'] = json.dumps(row['extra'])
+        row['extra'] = json.dumps(row['extra'], ensure_ascii=False)
 
         if isinstance(media, types.MessageMediaContact):
             row['type'] = 'contact'
@@ -558,9 +563,11 @@ class Dumper:
                 row['local_id'] = doc.id
                 row['file_reference'] = doc.file_reference
                 row['secret'] = doc.access_hash
+                row['dc_id'] = doc.dc_id
                 for attr in doc.attributes:
                     if isinstance(attr, types.DocumentAttributeFilename):
                         row['name'] = attr.file_name
+                        break
 
         elif isinstance(media, types.MessageMediaEmpty):
             row['type'] = 'empty'
@@ -627,21 +634,27 @@ class Dumper:
             row['type'] = 'photo'
             row['mime_type'] = 'image/jpeg'
             row['name'] = str(media.date)
+            row['local_id'] = getattr(media, 'id', None)
+            row['secret'] = getattr(media, 'access_hash', None)
             row['file_reference'] = media.file_reference
+            row['dc_id'] = getattr(media, 'dc_id', None)
             sizes = [x for x in media.sizes
-                     if isinstance(x, (types.PhotoSize, types.PhotoCachedSize))]
+                     if isinstance(x, (types.PhotoSize, types.PhotoCachedSize, types.PhotoSizeProgressive))]
             if sizes:
                 small = min(sizes, key=lambda s: s.w * s.h)
                 large = max(sizes, key=lambda s: s.w * s.h)
+                row['thumb_size'] = large.type
                 media = large
                 if small != large:
                     row['thumbnail_id'] = self.dump_media(small, 'thumbnail')
 
         if isinstance(media, (types.PhotoSize,
                               types.PhotoCachedSize,
+                              types.PhotoSizeProgressive,
                               types.PhotoSizeEmpty)):
             row['type'] = 'photo'
             row['mime_type'] = 'image/jpeg'
+            row['thumb_size'] = media.type
             if isinstance(media, types.PhotoSizeEmpty):
                 row['size'] = 0
             else:
@@ -649,7 +662,7 @@ class Dumper:
                     row['size'] = media.size
                 elif isinstance(media, types.PhotoCachedSize):
                     row['size'] = len(media.bytes)
-                if isinstance(media.location, types.FileLocationToBeDeprecated):
+                if hasattr(media, 'location'):
                     media = media.location
 
         if isinstance(media, (types.UserProfilePhoto, types.ChatPhoto)):
@@ -660,25 +673,24 @@ class Dumper:
             )
             media = media.photo_big
 
-        if isinstance(media, types.FileLocationToBeDeprecated):
-            row['local_id'] = media.local_id
-            row['volume_id'] = media.volume_id
-            #row['secret'] = media.secretField is not available for FileLocationToBeDeprecated media.secret
-
-        if media.to_dict().get("file_reference"):
-            row["file_reference"] = media.file_reference
+        for key in ('local_id', 'volume_id', 'secret', 'file_reference', 'dc_id'):
+            value = getattr(media, key, None)
+            if value is not None:
+                row[key] = value
+        if hasattr(media, 'access_hash'):
+            row['secret'] = media.access_hash
 
         if row['type']:
             # We'll say two files are the same if they point to the same
-            # downloadable content (through local_id/volume_id/secret).
+            # downloadable content (through local_id/secret/file_reference).
 
             for callback in self._dump_callbacks['media']:
                 callback(row)
 
             c = self.conn.cursor()
             c.execute('SELECT ID FROM Media WHERE LocalID = ? '
-                      'AND VolumeID = ? AND Secret = ?',
-                      (row['local_id'], row['volume_id'], row['secret']))
+                      'AND Secret IS ? AND FileReference IS ?',
+                      (row['local_id'], row['secret'], row['file_reference']))
             existing_row = c.fetchone()
             if existing_row:
                 return existing_row[0]
@@ -686,9 +698,9 @@ class Dumper:
             return self._insert('Media', (
                 None,
                 row['name'], row['mime_type'], row['size'],
-                row['thumbnail_id'], row['type'],
+                row['thumbnail_id'], row['type'], row['thumb_size'],
                 row['local_id'], row['volume_id'], row['secret'],
-                row['file_reference'], row['extra']
+                row['dc_id'], row['file_reference'], row['extra']
             ))
 
     def dump_forward(self, forward):
@@ -814,7 +826,10 @@ class Dumper:
         The tuples should consist of four elements, these being
         ``(media_id, context_id, sender_id, date)``.
         """
-        resume_media = [(mt[0], mt[1],get_peer_id(mt[2]), mt[3]) for mt in media_tuples]
+        resume_media = [
+            (mt[0], mt[1], (get_peer_id(mt[2]) if mt[2] is not None else mt[2]), mt[3])
+            for mt in media_tuples
+        ]
         self.conn.executemany("INSERT OR REPLACE INTO ResumeMedia "
                               "VALUES (?,?,?,?)", resume_media)
 

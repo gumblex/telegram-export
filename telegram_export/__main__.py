@@ -20,6 +20,12 @@ from telegram_export.dumper import Dumper
 from telegram_export.exporter import Exporter
 from telegram_export.formatters import NAME_TO_FORMATTER
 
+try:
+    import uvloop
+    uvloop.install()
+except ImportError:
+    pass
+
 logger = logging.getLogger('')  # Root logger
 
 

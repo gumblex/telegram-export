@@ -9,7 +9,7 @@ from collections import defaultdict
 
 import tqdm
 from telethon import utils
-from telethon.errors import ChatAdminRequiredError
+from telethon.errors import ChatAdminRequiredError, FloodWaitError
 from telethon.tl import types, functions
 
 from . import utils as export_utils
@@ -218,7 +218,8 @@ class Downloader:
     async def _download_media(self, media_id, context_id, sender_id, date,
                               bar):
         media_row = self.dumper.conn.execute(
-            'SELECT LocalID, VolumeID, Secret, Type, MimeType, Name, Size, FileReference '
+            'SELECT LocalID, VolumeID, Secret, Type, '
+            '  MimeType, Name, Size, FileReference, DC, ThumbSize '
             'FROM Media WHERE ID = ?', (media_id,)
         ).fetchone()
         # Documents have attributes and they're saved under the "document"
@@ -248,6 +249,9 @@ class Downloader:
             filename = date.strftime(
                 '{}_%Y-%m-%d_%H-%M-%S'.format(formatter['type'])
             )
+        # Remove unfriendly chars
+        for ch in '<>:"/\|?*':
+            filename = filename.replace(ch, '_')
 
         # The saved media didn't have a filename and we set our own.
         # Detect a sensible extension from the known mimetype.
@@ -269,17 +273,23 @@ class Downloader:
             location = types.InputDocumentFileLocation(
                 id=media_row[0],
                 #version=media_row[1],
-                access_hash=media_row[2],
-                thumb_size=str(media_row[6]),
-                #thumb_size=None,
-                file_reference=media_row[7] or ''
+                access_hash=media_row[2] or 0,
+                thumb_size='',
+                file_reference=media_row[7] or b''
+            )
+        elif media_type == 'photo':
+            location = types.InputPhotoFileLocation(
+                id=media_row[0],
+                access_hash=media_row[2] or 0,
+                thumb_size=media_row[9] or 'w',
+                file_reference=media_row[7] or b''
             )
         else:
             location = types.InputFileLocation(
                 local_id=media_row[0],
-                volume_id=media_row[1],
+                volume_id=media_row[1] or 0,
                 secret=media_row[2] or 0,
-                file_reference=media_row[7] or ''
+                file_reference=media_row[7] or b''
             )
 
         def progress(saved, total):
@@ -300,22 +310,27 @@ class Downloader:
             bar.total += media_row[6]
 
         self._incomplete_download = filename
-        if location.file_reference:
-            #print(f"!!! downloading {filename} {location} for {media_row}")
+        if not location.file_reference:
+            __log__.warn(f"Missing file_reference in {location} for {media_row}")
+
+        for i in range(5):
             try:
                 await self.client.download_file(
-                    location,
-                    file=filename,
+                    location, file=filename,
                     file_size=media_row[6],
                     part_size_kb=DOWNLOAD_PART_SIZE // 1024,
                     progress_callback=progress,
+                    dc_id=media_row[8]
                 )
-            except:
+                self._incomplete_download = None
+            except FloodWaitError as e:
+                if i < 4:
+                    await asyncio.sleep(e.seconds)
+                    continue
+                raise
+            except Exception:
                 __log__.exception(f"Error downloading {filename} {location} for {media_row}")
-
-        else:
-            __log__.warn(f"!!! missing file_reference in {location} for {media_row}")
-        self._incomplete_download = None
+                break
 
     async def _media_consumer(self, queue, bar):
         while self._running:

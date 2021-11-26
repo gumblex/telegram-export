@@ -15,12 +15,12 @@ with open("requirements.txt", "r") as req:
 setup(
     name='telegram-export',
     license="MPL 2.0",
-    version='1.8.2',
+    version='1.9.0',
     description='A tool to download Telegram data (users, chats, messages, '
                 'and media) into a database (and display the saved data).',
     long_description=desc,
-    url='https://github.com/expectocode/telegram-export',
-    author='expectocode and Lonami',
+    url='https://github.com/gumblex/telegram-export',
+    author='expectocode, Lonami, Sascha Markus, gumblex',
     author_email='expectocode@gmail.com',
     classifiers=[
         'Development Status :: 4 - Beta',
@@ -34,7 +34,7 @@ setup(
     scripts=['bin/telegram-export'],
     test_suite='telegram_export.tests',
     project_urls={
-        'Bug Reports': 'https://github.com/expectocode/telegram-export/issues',
-        'Source': 'https://github.com/expectocode/telegram-export'
+        'Bug Reports': 'https://github.com/gumblex/telegram-export/issues',
+        'Source': 'https://github.com/gumblex/telegram-export'
     }
 )
