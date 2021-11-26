@@ -9,7 +9,7 @@ into a database (and display the saved data).
 
 Fork of the original project
 ============================
-This is a fork of the [original project](https://github.com/expectocode/telegram-export), which keeps the protocol/schema up-to-date, but new functions are rarely added.
+This is a fork of the `original project <https://github.com/expectocode/telegram-export>`__, which keeps the protocol/schema up-to-date, but new functions are rarely added.
 
 **Warning:** The database schema is changed. Please manually update the database, or start over from an empty folder.
 
