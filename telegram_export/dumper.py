@@ -121,6 +121,7 @@ class Dumper:
                       "Name TEXT,"
                       "MimeType TEXT,"
                       "Size INT,"
+                      "Date INT,"
                       "ThumbnailID INT,"
                       "Type TEXT,"
                       # Max photo thumb size
@@ -206,6 +207,8 @@ class Dumper:
                       "FOREIGN KEY (ForwardID) REFERENCES Forward(ID),"
                       "FOREIGN KEY (MediaID) REFERENCES Media(ID),"
                       "PRIMARY KEY (ID, ContextID))")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_message_mediaid "
+                      "ON Message (MediaID)")
 
             c.execute("CREATE TABLE AdminLog("
                       "ID INT NOT NULL,"
@@ -525,27 +528,89 @@ class Dumper:
         c.execute("INSERT INTO ChatParticipants VALUES (?, ?, ?, ?)", row)
         return added, removed
 
-    def dump_media(self, media, media_type=None):
+    def dump_media(self, media, media_type=None, media_id=None, thumb_id=None,
+        orig_file=None):
         """Dump a MessageMedia into the Media table
         Params: media Telethon object
         Returns: ID of inserted row"""
         if not media:
             return
 
+        def _parse_photo_sizes(photo_sizes):
+            results = []
+            for ps in photo_sizes:
+                if not isinstance(ps, (
+                    types.PhotoSize, types.PhotoCachedSize,
+                    types.PhotoSizeProgressive
+                )):
+                    continue
+                file_size = None
+                if hasattr(ps, 'size'):
+                    file_size = ps.size
+                elif hasattr(ps, 'bytes'):
+                    file_size = len(ps.bytes)
+                elif hasattr(ps, 'sizes'):
+                    file_size = max(ps.sizes)
+                results.append((ps.w * ps.h, file_size, ps.type, ps.to_dict()))
+            results.sort()
+            return results
+
+        def _save_file(row, row_id=None):
+            # We'll say two files are the same if they point to the same
+            # downloadable content
+            # (through local_id/secret/file_reference/thumb_size).
+            # If row_id is present, this is for updating file reference.
+
+            for callback in self._dump_callbacks['media']:
+                callback(row)
+
+            if row_id is None:
+                c = self.conn.cursor()
+                c.execute('SELECT ID FROM Media WHERE LocalID = ? '
+                          'AND Secret IS ? AND FileReference IS ? '
+                          'AND ThumbSize IS ?', (
+                    row['local_id'], row['secret'],
+                    row['file_reference'], row['thumb_size']
+                ))
+                existing_row = c.fetchone()
+                if existing_row:
+                    return existing_row[0]
+
+            return self._insert('Media', (
+                row_id, # ID
+                row['name'], row['mime_type'], row['size'], row['date'],
+                row['thumbnail_id'], row['type'], row['thumb_size'],
+                row['local_id'], row['volume_id'], row['secret'],
+                row['dc_id'], row['file_reference'],
+                row['extra']
+            ))
+
+        def _save_thumb(row, thumb_desc, row_id=None):
+            thumb = row.copy()
+            thumb['type'] = 'photo.thumbnail'
+            thumb['mime_type'] = 'image/jpeg'
+            thumb['size'] = thumb_desc[1]
+            thumb['thumb_size'] = thumb_desc[2]
+            thumb['thumbnail_id'] = None
+            sanitize_dict(thumb_desc[3])
+            thumb['extra'] = json.dumps(thumb_desc[3], ensure_ascii=False)
+            return _save_file(thumb, row_id)
+
        # print(f"dump_media: {media}")
 
         row = {x: None for x in (
-            'name', 'mime_type', 'size', 'thumb_size', 'thumbnail_id',
-            'local_id', 'volume_id', 'secret', 'file_reference', 'dc_id'
+            'name', 'mime_type', 'size', 'date', 'thumb_size', 'thumbnail_id',
+            'type', 'local_id', 'volume_id', 'secret', 'file_reference', 'dc_id'
         )}
-        row['type'] = media_type
+        if orig_file:
+            row.update(orig_file)
         row['extra'] = media.to_dict()
         sanitize_dict(row['extra'])
         row['extra'] = json.dumps(row['extra'], ensure_ascii=False)
 
         if isinstance(media, types.MessageMediaContact):
             row['type'] = 'contact'
-            row['name'] = '{} {}'.format(media.first_name, media.last_name)
+            row['name'] = ' '.join(filter(None, (media.first_name, media.last_name)))
             row['local_id'] = media.user_id
             try:
                 row['secret'] = int(media.phone_number or '0')
@@ -558,8 +623,8 @@ class Dumper:
             if isinstance(doc, types.Document):
                 row['mime_type'] = doc.mime_type
                 row['size'] = doc.size
-                if doc.thumbs:
-                    row['thumbnail_id'] = self.dump_media(doc.thumbs[0])
+                if doc.date:
+                    row['date'] = doc.date.timestamp()
                 row['local_id'] = doc.id
                 row['file_reference'] = doc.file_reference
                 row['secret'] = doc.access_hash
@@ -568,6 +633,9 @@ class Dumper:
                     if isinstance(attr, types.DocumentAttributeFilename):
                         row['name'] = attr.file_name
                         break
+                if doc.thumbs:
+                    row['thumbnail_id'] = _save_thumb(
+                        row, _parse_photo_sizes(doc.thumbs)[0], thumb_id)
 
         elif isinstance(media, types.MessageMediaEmpty):
             row['type'] = 'empty'
@@ -577,16 +645,18 @@ class Dumper:
             row['type'] = 'game'
             game = media.game
             if isinstance(game, types.Game):
-                row['name'] = game.short_name
-                row['thumbnail_id'] = self.dump_media(game.photo)
+                row['name'] = game.title or game.short_name
                 row['local_id'] = game.id
                 row['secret'] = game.access_hash
+                row['thumbnail_id'] = self.dump_media(
+                    game.photo, media_id=thumb_id, orig_file=row)
 
         elif isinstance(media, types.MessageMediaGeo):
             row['type'] = 'geo'
             geo = media.geo
             if isinstance(geo, types.GeoPoint):
                 row['name'] = '({}, {})'.format(repr(geo.lat), repr(geo.long))
+                row['secret'] = game.access_hash
 
         elif isinstance(media, types.MessageMediaGeoLive):
             row['type'] = 'geolive'
@@ -597,12 +667,14 @@ class Dumper:
         elif isinstance(media, types.MessageMediaInvoice):
             row['type'] = 'invoice'
             row['name'] = media.title
-            row['thumbnail_id'] = self.dump_media(media.photo)
+            row['thumbnail_id'] = self.dump_media(
+                media.photo, media_id=thumb_id, orig_file=row)
 
         elif isinstance(media, types.MessageMediaPhoto):
             row['type'] = 'photo'
             row['mime_type'] = 'image/jpeg'
             media = media.photo
+            # processed below
 
         elif isinstance(media, types.MessageMediaUnsupported):
             row['type'] = 'unsupported'
@@ -624,54 +696,39 @@ class Dumper:
             row['type'] = 'webpage'
             web = media.webpage
             if isinstance(web, types.WebPage):
-                row['name'] = web.title
-                row['thumbnail_id'] = self.dump_media(web.photo, 'thumbnail')
+                row['name'] = web.title or web.url
                 row['local_id'] = web.id
                 row['secret'] = web.hash
+                if isinstance(web.photo, types.Photo):
+                    row['thumbnail_id'] = self.dump_media(
+                        web.photo, media_id=thumb_id, orig_file=row)
+
+        elif isinstance(media, types.MessageMediaPoll):
+            row['type'] = 'poll'
+            row['name'] = getattr(media.poll, 'question', None)
+
+        elif isinstance(media, types.MessageMediaDice):
+            row['type'] = 'dice'
+            row['name'] = '%s %s' % (media.emoticon, media.value)
 
         if isinstance(media, types.Photo):
             # Extra fallback cases for common parts
             row['type'] = 'photo'
             row['mime_type'] = 'image/jpeg'
-            row['name'] = str(media.date)
             row['local_id'] = getattr(media, 'id', None)
             row['secret'] = getattr(media, 'access_hash', None)
             row['file_reference'] = media.file_reference
             row['dc_id'] = getattr(media, 'dc_id', None)
-            sizes = [x for x in media.sizes
-                     if isinstance(x, (types.PhotoSize, types.PhotoCachedSize, types.PhotoSizeProgressive))]
-            if sizes:
-                small = min(sizes, key=lambda s: s.w * s.h)
-                large = max(sizes, key=lambda s: s.w * s.h)
-                row['thumb_size'] = large.type
-                media = large
-                if small != large:
-                    row['thumbnail_id'] = self.dump_media(small, 'thumbnail')
-
-        if isinstance(media, (types.PhotoSize,
-                              types.PhotoCachedSize,
-                              types.PhotoSizeProgressive,
-                              types.PhotoSizeEmpty)):
-            row['type'] = 'photo'
-            row['mime_type'] = 'image/jpeg'
-            row['thumb_size'] = media.type
-            if isinstance(media, types.PhotoSizeEmpty):
-                row['size'] = 0
-            else:
-                if isinstance(media, types.PhotoSize):
-                    row['size'] = media.size
-                elif isinstance(media, types.PhotoCachedSize):
-                    row['size'] = len(media.bytes)
-                if hasattr(media, 'location'):
-                    media = media.location
-
-        if isinstance(media, (types.UserProfilePhoto, types.ChatPhoto)):
-            row['type'] = 'photo'
-            row['mime_type'] = 'image/jpeg'
-            row['thumbnail_id'] = self.dump_media(
-                media.photo_small, 'thumbnail'
-            )
-            media = media.photo_big
+            if media.date:
+                row['date'] = media.date.timestamp()
+            if media.sizes:
+                sizes = _parse_photo_sizes(media.sizes)
+                large = sizes[-1]
+                row['size'] = large[1]
+                row['thumb_size'] = large[2]
+                if sizes[0] != large:
+                    row['thumbnail_id'] = _save_thumb(
+                        row, sizes[0], row_id=thumb_id)
 
         for key in ('local_id', 'volume_id', 'secret', 'file_reference', 'dc_id'):
             value = getattr(media, key, None)
@@ -679,29 +736,17 @@ class Dumper:
                 row[key] = value
         if hasattr(media, 'access_hash'):
             row['secret'] = media.access_hash
+        if getattr(media, 'date', None):
+            if isinstance(media.date, datetime):
+                row['date'] = media.date.timestamp()
+            else:
+                row['date'] = media.date
+
+        if media_type and media_type.startswith(row['type']):
+            row['type'] = media_type
 
         if row['type']:
-            # We'll say two files are the same if they point to the same
-            # downloadable content (through local_id/secret/file_reference).
-
-            for callback in self._dump_callbacks['media']:
-                callback(row)
-
-            c = self.conn.cursor()
-            c.execute('SELECT ID FROM Media WHERE LocalID = ? '
-                      'AND Secret IS ? AND FileReference IS ?',
-                      (row['local_id'], row['secret'], row['file_reference']))
-            existing_row = c.fetchone()
-            if existing_row:
-                return existing_row[0]
-
-            return self._insert('Media', (
-                None,
-                row['name'], row['mime_type'], row['size'],
-                row['thumbnail_id'], row['type'], row['thumb_size'],
-                row['local_id'], row['volume_id'], row['secret'],
-                row['dc_id'], row['file_reference'], row['extra']
-            ))
+            return _save_file(row, media_id)
 
     def dump_forward(self, forward):
         """

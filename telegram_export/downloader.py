@@ -8,8 +8,8 @@ import time
 from collections import defaultdict
 
 import tqdm
+import telethon.errors
 from telethon import utils
-from telethon.errors import ChatAdminRequiredError, FloodWaitError
 from telethon.tl import types, functions
 
 from . import utils as export_utils
@@ -95,7 +95,8 @@ class Downloader:
         #print(f"_dump_full_entity: {entity}")
         if isinstance(entity, types.UserFull):
             if not self.types or 'chatphoto' in self.types:
-                photo_id = self.dumper.dump_media(entity.profile_photo)
+                photo_id = self.dumper.dump_media(
+                    entity.profile_photo, 'photo.chat')
             else:
                 photo_id = None
             self.enqueue_photo(entity.profile_photo, photo_id, entity.user)
@@ -103,7 +104,7 @@ class Downloader:
 
         elif isinstance(entity, types.Chat):
             if not self.types or 'chatphoto' in self.types:
-                photo_id = self.dumper.dump_media(entity.photo)
+                photo_id = self.dumper.dump_media(entity.photo, 'photo.chat')
             else:
                 photo_id = None
             self.enqueue_photo(entity.photo, photo_id, entity)
@@ -111,7 +112,8 @@ class Downloader:
 
         elif isinstance(entity, types.messages.ChatFull):
             if not self.types or 'chatphoto' in self.types:
-                photo_id = self.dumper.dump_media(entity.full_chat.chat_photo)
+                photo_id = self.dumper.dump_media(
+                    entity.full_chat.chat_photo, 'photo.chat')
             else:
                 photo_id = None
             chat = next(
@@ -217,14 +219,43 @@ class Downloader:
 
     async def _download_media(self, media_id, context_id, sender_id, date,
                               bar):
+
+        def _get_media_location(media_type, media_row):
+            if media_type == 'document':
+                return types.InputDocumentFileLocation(
+                    id=media_row[0],
+                    #version=media_row[1],
+                    access_hash=media_row[2] or 0,
+                    thumb_size='',
+                    file_reference=media_row[7] or b''
+                )
+            elif media_type == 'photo':
+                return types.InputPhotoFileLocation(
+                    id=media_row[0],
+                    access_hash=media_row[2] or 0,
+                    thumb_size=media_row[9] or 'w',
+                    file_reference=media_row[7] or b''
+                )
+            else:
+                return types.InputFileLocation(
+                    local_id=media_row[0],
+                    volume_id=media_row[1] or 0,
+                    secret=media_row[2] or 0,
+                    file_reference=media_row[7] or b''
+                )
+
         media_row = self.dumper.conn.execute(
             'SELECT LocalID, VolumeID, Secret, Type, '
             '  MimeType, Name, Size, FileReference, DC, ThumbSize '
             'FROM Media WHERE ID = ?', (media_id,)
         ).fetchone()
+        if not media_row:
+            __log__.warning('Media ID %s not found.', media_id)
+            return
+        media_row = list(media_row)
         # Documents have attributes and they're saved under the "document"
         # namespace so we need to split it before actually comparing.
-        media_type = media_row[3].split('.')
+        media_type = media_row[3].split('.', 1)
         media_type, media_subtype = media_type[0], media_type[-1]
         if media_type not in ('photo', 'document'):
             return  # Only photos or documents are actually downloadable
@@ -269,28 +300,7 @@ class Downloader:
         __log__.debug('Downloading to %s', filename)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         #print(f"_download_media: {media_row}")
-        if media_type == 'document':
-            location = types.InputDocumentFileLocation(
-                id=media_row[0],
-                #version=media_row[1],
-                access_hash=media_row[2] or 0,
-                thumb_size='',
-                file_reference=media_row[7] or b''
-            )
-        elif media_type == 'photo':
-            location = types.InputPhotoFileLocation(
-                id=media_row[0],
-                access_hash=media_row[2] or 0,
-                thumb_size=media_row[9] or 'w',
-                file_reference=media_row[7] or b''
-            )
-        else:
-            location = types.InputFileLocation(
-                local_id=media_row[0],
-                volume_id=media_row[1] or 0,
-                secret=media_row[2] or 0,
-                file_reference=media_row[7] or b''
-            )
+        location = _get_media_location(media_type, media_row)
 
         def progress(saved, total):
             """Increment the tqdm progress bar"""
@@ -323,14 +333,44 @@ class Downloader:
                     dc_id=media_row[8]
                 )
                 self._incomplete_download = None
-            except FloodWaitError as e:
+            except telethon.errors.FloodWaitError as e:
                 if i < 4:
                     await asyncio.sleep(e.seconds)
                     continue
                 raise
+            except telethon.errors.FileMigrateError as e:
+                __log__.debug('File %s (%s) migrated from DC %s to DC %s',
+                    media_id, filename, media_row[8], e.new_dc)
+                self.dumper.conn.execute(
+                    'UPDATE Media SET DC=? WHERE ID = ?', (e.new_dc, media_id))
+                self.dumper.commit()
+                media_row[8] = e.new_dc
+                continue
+            except (telethon.errors.FileReferenceExpiredError,
+                    telethon.errors.FileReferenceEmptyError,
+                    telethon.errors.FilerefUpgradeNeededError):
+                __log__.debug('Refetch message for expired file ref %s (%s).',
+                    media_id, filename)
+                refreshed_id = await self._refresh_media_messages(media_id)
+                if refreshed_id is None:
+                    __log__.warning('Message for %s (%s) not found.',
+                        media_id, filename)
+                    break
+                media_row = self.dumper.conn.execute(
+                    'SELECT LocalID, VolumeID, Secret, Type, '
+                    '  MimeType, Name, Size, FileReference, DC, ThumbSize '
+                    'FROM Media WHERE ID = ?', (refreshed_id,)
+                ).fetchone()
+                if not media_row:
+                    __log__.warning('Media ID %s not found.', refreshed_id)
+                    break
+                location = _get_media_location(media_type, media_row)
+                continue
             except Exception:
                 __log__.exception(f"Error downloading {filename} {location} for {media_row}")
                 break
+        if self._incomplete_download and os.path.isfile(self._incomplete_download):
+            os.remove(self._incomplete_download)
 
     async def _media_consumer(self, queue, bar):
         while self._running:
@@ -365,6 +405,39 @@ class Downloader:
             queue.task_done()
             bar.update(1)
             await asyncio.sleep(max(CHAT_FULL_DELAY - (time.time() - start), 0))
+
+    async def _refresh_media_messages(self, media_id):
+        msg_row = self.dumper.conn.execute("""
+            SELECT ms.ContextID, ms.ID, md.ThumbnailID
+            FROM Message ms
+            INNER JOIN Media md ON md.ID=ms.MediaID
+            WHERE ms.MediaID=?
+            ORDER BY ms.ContextID DESC, ms.ID DESC
+        """, (media_id,)).fetchone()
+        if not msg_row:
+            return
+
+        context_id, msg_id, thumb_id = msg_row
+        peer = utils.get_peer(context_id)
+        if isinstance(peer, types.PeerChannel):
+            req = functions.channels.GetMessagesRequest(
+                channel=peer, id=[types.InputMessageID(id=msg_id)])
+        else:
+            req = functions.messages.GetMessagesRequest(
+                id=[types.InputMessageID(id=msg_id)])
+
+        result = await self.client(req)
+        dump_mid = None
+        for m in result.messages:
+            if isinstance(m, types.Message):
+                dump_mid = self.dumper.dump_media(
+                    m.media, media_id=media_id, thumb_id=thumb_id)
+            elif (isinstance(m, types.MessageService) and
+                  isinstance(m.action, types.MessageActionChatEditPhoto)):
+                dump_mid = self.dumper.dump_media(
+                    m.action.photo, media_id=media_id, thumb_id=thumb_id)
+        self.dumper.commit()
+        return dump_mid
 
     def enqueue_entities(self, entities):
         """
@@ -478,7 +551,7 @@ class Downloader:
                     )
                     __log__.info('Saved %d new members, %d left the chat.',
                                  len(added), len(removed))
-                except ChatAdminRequiredError:
+                except telethon.errors.ChatAdminRequiredError:
                     __log__.info('Getting participants aborted (admin '
                                  'rights revoked while getting them).')
 
@@ -500,7 +573,7 @@ class Downloader:
                 try:
                     await self.client(log_req)
                     log_req.limit = 100
-                except ChatAdminRequiredError:
+                except telethon.errors.ChatAdminRequiredError:
                     log_req = None
             else:
                 log_req = None

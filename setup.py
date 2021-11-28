@@ -15,7 +15,7 @@ with open("requirements.txt", "r") as req:
 setup(
     name='telegram-export',
     license="MPL 2.0",
-    version='1.9.0',
+    version='1.9.1',
     description='A tool to download Telegram data (users, chats, messages, '
                 'and media) into a database (and display the saved data).',
     long_description=desc,
