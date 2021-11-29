@@ -11,7 +11,7 @@ Fork of the original project
 ============================
 This is a fork of the `original project <https://github.com/expectocode/telegram-export>`__, which keeps the protocol/schema up-to-date, but new functions are rarely added.
 
-**Warning:** The database schema is changed. Please manually update the database, or start over from an empty folder.
+**Warning:** The database schema is changed. The database should be upgraded automatically, but please **backup the old database before running the new version**.
 
 As an alternative, some clients like Telegram Desktop now have a built-in "Export chat history" feature (in the three-dots menu of every chat) which you may use as a replacement.
 

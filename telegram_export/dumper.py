@@ -90,9 +90,11 @@ class Dumper:
                 # Sometimes there may be a table without values (see #55)
                 c.execute("DROP TABLE IF EXISTS Version")
                 exists = False
-            elif version[0] != DB_VERSION:
+            elif version[0] < DB_VERSION:
+                logger.warning("Upgrading database, please wait for a while...")
                 self._upgrade_database(old=version[0])
-                self.conn.commit()
+            elif version[0] != DB_VERSION:
+                logger.error("Database version is %s, but this telegram-export version uses database version %s. Please upgrade telegram-export.", version[0], DB_VERSION)
         if not exists:
             # Tables don't exist, create new ones
             c.execute("CREATE TABLE Version (Version INTEGER PRIMARY KEY)")
@@ -252,6 +254,47 @@ class Dumper:
         first version of the tables, in the future it should alter
         tables or somehow transfer the data between what changed.
         """
+        c = self.conn.cursor()
+        c.executescript("""
+        PRAGMA foreign_keys=OFF;
+        BEGIN;
+        DROP TABLE Version;
+        CREATE TABLE Version (Version INTEGER PRIMARY KEY);
+        INSERT INTO Version VALUES (2);
+
+        CREATE TABLE SelfInformation2 (UserID INTEGER PRIMARY KEY);
+        INSERT INTO SelfInformation2 SELECT * FROM SelfInformation;
+        DROP TABLE SelfInformation;
+        ALTER TABLE SelfInformation2 RENAME TO SelfInformation;
+
+        CREATE TABLE Forward2(ID INTEGER PRIMARY KEY,OriginalDate INT NOT NULL,FromID INT,ChannelPost INT,PostAuthor TEXT);
+        INSERT INTO Forward2 SELECT * FROM Forward;
+        DROP TABLE Forward;
+        ALTER TABLE Forward2 RENAME TO Forward;
+
+        CREATE TABLE Media2(ID INTEGER PRIMARY KEY,Name TEXT,MimeType TEXT,Size INT,Date INT,ThumbnailID INT,Type TEXT,ThumbSize TEXT,LocalID INT,VolumeID INT,Secret INT,DC INT,FileReference BLOB,Extra TEXT,FOREIGN KEY (ThumbnailID) REFERENCES Media(ID));
+        INSERT INTO Media2(ID, Name, MimeType, Size, ThumbnailID, Type, LocalID, VolumeID, Secret, Extra) SELECT * FROM Media;
+        DROP TABLE Media;
+        ALTER TABLE Media2 RENAME TO Media;
+        CREATE INDEX idx_media_local_id ON Media (LocalID);
+
+        CREATE INDEX idx_message_mediaid ON Message (MediaID);
+
+        CREATE TABLE Resume2(ContextID INTEGER PRIMARY KEY,ID INT NOT NULL,Date INT NOT NULL,StopAt INT NOT NULL);
+        INSERT INTO Resume2 SELECT * FROM Resume;
+        DROP TABLE Resume;
+        ALTER TABLE Resume2 RENAME TO Resume;
+
+        CREATE TABLE ResumeMedia2(MediaID INTEGER PRIMARY KEY,ContextID INT NOT NULL,SenderID INT,Date INT);
+        INSERT INTO ResumeMedia2 SELECT * FROM ResumeMedia;
+        DROP TABLE ResumeMedia;
+        ALTER TABLE ResumeMedia2 RENAME TO ResumeMedia;
+
+        ANALYZE;
+        COMMIT;
+        """)
+        # c.execute("PRAGMA foreign_key_check")
+        c.execute("VACUUM")
 
     # TODO make these callback functions less repetitive.
     # For the most friendly API, we should  have different methods for each
