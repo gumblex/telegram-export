@@ -244,6 +244,11 @@ class Downloader:
                     file_reference=media_row[7] or b''
                 )
 
+        def normalize_chars(filename):
+            for ch in '<>:"/\|?*':
+                filename = filename.replace(ch, '_')
+            return filename
+
         media_row = self.dumper.conn.execute(
             'SELECT LocalID, VolumeID, Secret, Type, '
             '  MimeType, Name, Size, FileReference, DC, ThumbSize '
@@ -265,8 +270,8 @@ class Downloader:
             context_id=context_id,
             sender_id=sender_id,
             type=media_subtype or 'unknown',
-            name=self._get_name(context_id) or 'unknown',
-            sender_name=self._get_name(sender_id) or 'unknown'
+            name=normalize_chars(self._get_name(context_id)) or 'unknown',
+            sender_name=normalize_chars(self._get_name(sender_id)) or 'unknown'
         )
 
         # Documents might have a filename, which may have an extension. Use
@@ -281,8 +286,7 @@ class Downloader:
                 '{}_%Y-%m-%d_%H-%M-%S'.format(formatter['type'])
             )
         # Remove unfriendly chars
-        for ch in '<>:"/\|?*':
-            filename = filename.replace(ch, '_')
+        filename = normalize_chars(filename)
 
         # The saved media didn't have a filename and we set our own.
         # Detect a sensible extension from the known mimetype.
