@@ -609,15 +609,20 @@ class Dumper:
 
             if row_id is None:
                 c = self.conn.cursor()
-                c.execute('SELECT ID FROM Media WHERE LocalID = ? '
-                          'AND Secret IS ? AND FileReference IS ? '
-                          'AND ThumbSize IS ?', (
-                    row['local_id'], row['secret'],
-                    row['file_reference'], row['thumb_size']
-                ))
+                if row['local_id']:
+                    c.execute("""
+                        SELECT ID FROM Media
+                        WHERE Type = ? AND ThumbSize IS ? AND LocalID = ?
+                        ORDER BY ID DESC
+                    """, (row['type'], row['thumb_size'], row['local_id']))
+                else:
+                    c.execute("""
+                        SELECT ID FROM Media
+                        WHERE Type = ? AND Extra = ?
+                    """, (row['type'], row['extra']))
                 existing_row = c.fetchone()
                 if existing_row:
-                    return existing_row[0]
+                    row_id = existing_row[0]
 
             return self._insert('Media', (
                 row_id, # ID
@@ -663,12 +668,12 @@ class Dumper:
         elif isinstance(media, types.MessageMediaDocument):
             row['type'] = utils.get_media_type(media)
             doc = media.document
+            row['local_id'] = getattr(doc, 'id', None)
             if isinstance(doc, types.Document):
                 row['mime_type'] = doc.mime_type
                 row['size'] = doc.size
                 if doc.date:
                     row['date'] = doc.date.timestamp()
-                row['local_id'] = doc.id
                 row['file_reference'] = doc.file_reference
                 row['secret'] = doc.access_hash
                 row['dc_id'] = doc.dc_id
@@ -687,9 +692,9 @@ class Dumper:
         elif isinstance(media, types.MessageMediaGame):
             row['type'] = 'game'
             game = media.game
+            row['local_id'] = getattr(game, 'id', None)
             if isinstance(game, types.Game):
                 row['name'] = game.title or game.short_name
-                row['local_id'] = game.id
                 row['secret'] = game.access_hash
                 row['thumbnail_id'] = self.dump_media(
                     game.photo, media_id=thumb_id, orig_file=row)
@@ -738,9 +743,9 @@ class Dumper:
         elif isinstance(media, types.MessageMediaWebPage):
             row['type'] = 'webpage'
             web = media.webpage
+            row['local_id'] = getattr(web, 'id', None)
             if isinstance(web, types.WebPage):
                 row['name'] = web.title or web.url
-                row['local_id'] = web.id
                 row['secret'] = web.hash
                 if isinstance(web.photo, types.Photo):
                     row['thumbnail_id'] = self.dump_media(

@@ -352,13 +352,13 @@ class Downloader:
                 continue
             except (telethon.errors.FileReferenceExpiredError,
                     telethon.errors.FileReferenceEmptyError,
-                    telethon.errors.FilerefUpgradeNeededError):
-                __log__.debug('Refetch message for expired file ref %s (%s).',
-                    media_id, filename)
+                    telethon.errors.FilerefUpgradeNeededError) as ex:
+                __log__.debug('%s: Refetch message for expired file ref %s (%s).',
+                    type(ex).__name__, media_id, filename)
                 refreshed_id = await self._refresh_media_messages(media_id)
                 if refreshed_id is None:
-                    __log__.warning('Message for %s (%s) not found.',
-                        media_id, filename)
+                    __log__.warning('%s: Message for %s (%s) not found.',
+                        type(ex).__name__, media_id, filename)
                     break
                 media_row = self.dumper.conn.execute(
                     'SELECT LocalID, VolumeID, Secret, Type, '
@@ -366,12 +366,13 @@ class Downloader:
                     'FROM Media WHERE ID = ?', (refreshed_id,)
                 ).fetchone()
                 if not media_row:
-                    __log__.warning('Media ID %s not found.', refreshed_id)
+                    __log__.warning('%s: Media ID %s not found.',
+                        type(ex).__name__, refreshed_id)
                     break
                 location = _get_media_location(media_type, media_row)
                 continue
             except Exception:
-                __log__.exception(f"Error downloading {filename} {location} for {media_row}")
+                __log__.exception(f"Error downloading [{media_id}] {filename}")
                 break
         if self._incomplete_download and os.path.isfile(self._incomplete_download):
             os.remove(self._incomplete_download)
