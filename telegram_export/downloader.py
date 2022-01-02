@@ -297,7 +297,10 @@ class Downloader:
         formatter['filename'] = filename
         filename = date.strftime(self.media_fmt).format_map(formatter)
         filename += '.{}{}'.format(media_id, ext)
-        if os.path.isfile(filename):
+        if os.path.isfile(filename) and (
+            not media_row[6] or
+            os.stat(filename).st_size == media_row[6]
+        ):
             __log__.debug('Skipping already-existing file %s', filename)
             return
 
@@ -374,6 +377,8 @@ class Downloader:
             except Exception:
                 __log__.exception(f"Error downloading [{media_id}] {filename}")
                 break
+        if bar.total < bar.n:
+            bar.total = bar.n
         if self._incomplete_download and os.path.isfile(self._incomplete_download):
             os.remove(self._incomplete_download)
 
@@ -725,12 +730,17 @@ class Downloader:
                         postfix={'chat': utils.get_display_name(target)})
 
         msg_cursor = dumper.conn.cursor()
-        msg_cursor.execute('SELECT ID, Date, FromID, MediaID FROM Message '
-                           'WHERE ContextID = ? AND MediaID IS NOT NULL',
-                           (target_id,))
+        msg_cursor.execute("""
+            SELECT s.ID, s.Date, s.FromID, s.MediaID, md.Type
+            FROM Message s INNER JOIN Media md ON md.ID=s.MediaID
+            WHERE s.ContextID = ?
+        """, (target_id,))
 
         msg_row = msg_cursor.fetchone()
         while msg_row:
+            if self.types and msg_row[4] not in self.types:
+                msg_row = msg_cursor.fetchone()
+                continue
             await self._download_media(
                 media_id=msg_row[3],
                 context_id=target_id,
