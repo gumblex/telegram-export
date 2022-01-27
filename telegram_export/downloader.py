@@ -315,13 +315,8 @@ class Downloader:
                 # No size was found so the bar total wasn't incremented before
                 bar.total += saved
                 bar.update(saved)
-            elif saved == total:
-                # Downloaded the last bit (which is probably <> part size)
-                mod = (saved % DOWNLOAD_PART_SIZE) or DOWNLOAD_PART_SIZE
-                bar.update(mod)
             else:
-                # All chunks are of the same size and this isn't the last one
-                bar.update(DOWNLOAD_PART_SIZE)
+                bar.update(bar.total - total + saved - bar.n)
 
         if media_row[6] is not None:
             bar.total += media_row[6]
@@ -340,6 +335,7 @@ class Downloader:
                     dc_id=media_row[8]
                 )
                 self._incomplete_download = None
+                break
             except telethon.errors.FloodWaitError as e:
                 if i < 4:
                     await asyncio.sleep(e.seconds)
