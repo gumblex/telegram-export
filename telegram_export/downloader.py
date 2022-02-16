@@ -402,12 +402,15 @@ class Downloader:
         while self._running:
             start = time.time()
             chat = await queue.get()
-            if isinstance(chat, (types.Chat, types.PeerChat)):
-                self._dump_full_entity(chat)
-            else:  # isinstance(chat, (types.Channel, types.PeerChannel)):
-                self._dump_full_entity(await self.client(
-                    functions.channels.GetFullChannelRequest(chat)
-                ))
+            try:
+                if isinstance(chat, (types.Chat, types.PeerChat)):
+                    self._dump_full_entity(chat)
+                else:  # isinstance(chat, (types.Channel, types.PeerChannel)):
+                    self._dump_full_entity(await self.client(
+                        functions.channels.GetFullChannelRequest(chat)
+                    ))
+            except Exception:
+                __log__.exception('Dump chat %s failed.' % chat)
             queue.task_done()
             bar.update(1)
             await asyncio.sleep(max(CHAT_FULL_DELAY - (time.time() - start), 0))

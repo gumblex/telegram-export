@@ -681,9 +681,9 @@ class Dumper:
                     if isinstance(attr, types.DocumentAttributeFilename):
                         row['name'] = attr.file_name
                         break
-                if doc.thumbs:
-                    row['thumbnail_id'] = _save_thumb(
-                        row, _parse_photo_sizes(doc.thumbs)[0], thumb_id)
+                sizes = _parse_photo_sizes(doc.thumbs) if doc.thumbs else None
+                if sizes:
+                    row['thumbnail_id'] = _save_thumb(row, sizes[0], thumb_id)
 
         elif isinstance(media, types.MessageMediaEmpty):
             row['type'] = 'empty'
@@ -769,8 +769,8 @@ class Dumper:
             row['dc_id'] = getattr(media, 'dc_id', None)
             if media.date:
                 row['date'] = media.date.timestamp()
-            if media.sizes:
-                sizes = _parse_photo_sizes(media.sizes)
+            sizes = _parse_photo_sizes(media.sizes) if media.sizes else []
+            if sizes:
                 large = sizes[-1]
                 row['size'] = large[1]
                 row['thumb_size'] = large[2]
