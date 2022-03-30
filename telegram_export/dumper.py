@@ -704,7 +704,7 @@ class Dumper:
             geo = media.geo
             if isinstance(geo, types.GeoPoint):
                 row['name'] = '({}, {})'.format(repr(geo.lat), repr(geo.long))
-                row['secret'] = game.access_hash
+                row['secret'] = geo.access_hash
 
         elif isinstance(media, types.MessageMediaGeoLive):
             row['type'] = 'geolive'
@@ -790,7 +790,7 @@ class Dumper:
             else:
                 row['date'] = media.date
 
-        if media_type and media_type.startswith(row['type']):
+        if media_type and row['type'] and media_type.startswith(row['type']):
             row['type'] = media_type
 
         if row['type']:
